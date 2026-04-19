@@ -495,6 +495,336 @@ Snowflake uses a hierarchical structure:
 
 </details>
 
+
+
+
+<details> <summary>Snowflake Stored Procedures </summary>
+
+### ⚙️ What are Stored Procedures?
+- Named collections of **SQL statements + procedural logic**
+- Used to **automate and modularize repetitive tasks**
+- Example: batch deletes, maintenance jobs
+
+---
+
+## 🧊 Stored Procedures in Snowflake
+
+### 🛠️ Implementation Methods
+- **JavaScript** (most established)
+- **Snowflake Scripting (SQL + procedural logic)**
+- **Snowpark** (Python, Java, Scala)
+
+---
+
+### 📦 Key Characteristics
+- Created as **database objects** (within database & schema)
+- Can take **0 or more input parameters** (signature)
+- Must define a **return type** (even if not used)
+- Typically used for **actions**, not returning values
+
+---
+
+### 🔁 Execution
+- Invoked using:
+
+CALL procedure_name(...);
+
+
+Called as a standalone statement
+## 🧠 JavaScript Stored Procedures
+
+### ✨ Features
+- Mix **JavaScript + SQL**
+- Supports:
+  - Variables
+  - Loops
+  - Conditional logic
+  - Error handling
+
+---
+
+### 🔗 SQL Execution
+- SQL is **built dynamically** within JavaScript
+- Executed using **Snowflake JavaScript API**
+
+
+var sql_command = "SELECT * FROM my_table";
+snowflake.execute({ sqlText: sql_command });
+
+## ⚖️ Stored Procedures vs UDFs
+
+| Feature              | Stored Procedure                  | UDF                          |
+|----------------------|----------------------------------|------------------------------|
+| Usage               | Standalone (`CALL`)              | Inside SQL queries           |
+| Return value        | Optional                         | Mandatory                    |
+| Return type         | Scalar (JS), Tabular (SQL)       | Scalar / Tabular             |
+| Purpose             | Perform actions (DML, admin)     | Compute & return values      |
+| Language flexibility| JS, SQL, Snowpark                | Limited (no JS API mixing)   |
+| Recursion           | Supported                        | Limited support              |
+| SQL integration     | Not usable inline                | Usable in `SELECT`, `WHERE`  |
+
+</details>
+
+
+
+
+
+<details> <summary>Snowflake Core Objects Reference</summary>
+  
+#### **1. User-Defined Function (UDF)**
+A UDF returns a single scalar value or a tabular result for each row of input. It’s used inside SQL like a built-in function.
+
+| **Attribute** | **Details** |
+| --- | --- |
+| **Purpose** | Encapsulate reusable logic that returns a value. Used in `SELECT`, `WHERE`, `ORDER BY`, etc. |
+| **Languages** | SQL, JavaScript, Java, Python, Scala |
+| **Types** | 1. **Scalar UDF**: Returns 1 value per row 2. **Table UDF/UDTF**: Returns a table per row. Call with `TABLE(function())` |
+| **State** | Stateless. Cannot run DDL/DML. No side effects. |
+| **Execution** | Runs in the context of the calling query. Parallelized per row/partition. |
+| **Overloading** | Supported. You can define multiple UDFs with same name but different arg types. |
+
+
+**Key limit**: Cannot access tables or run queries inside a SQL UDF. Java/Python UDFs can use Snowpark APIs to query data.
+
+#### **2. Stored Procedure**
+A procedure executes procedural logic and can run multiple SQL statements, including DDL/DML. Called with `CALL`.
+
+| **Attribute** | **Details** |
+| --- | --- |
+| **Purpose** | Orchestrate workflows: ETL steps, transactions, loops, error handling, dynamic SQL |
+| **Languages** | SQL Scripting, JavaScript, Java, Python, Scala |
+| **Return** | Single scalar value: `VARCHAR`, `VARIANT`, etc. Not a result set, unless you use `TABLE()` return type |
+| **State** | Can be stateful. Supports transactions, variables, exceptions. |
+| **Execution** | Runs as owner or caller: `EXECUTE AS OWNER` or `EXECUTE AS CALLER` |
+| **Side Effects** | Can run DDL/DML, create tables, insert data, send emails via external functions |
+| **Example** | ```sql
+CREATE OR REPLACE PROCEDURE load_and_clean(source_tbl STRING, target_tbl STRING)
+RETURNS STRING
+LANGUAGE SQL
+AS
+$$
+BEGIN
+  DELETE FROM IDENTIFIER(:target_tbl);
+  INSERT INTO IDENTIFIER(:target_tbl)
+    SELECT DISTINCT * FROM IDENTIFIER(:source_tbl) WHERE value IS NOT NULL;
+  RETURN 'Loaded ' || SQLROWCOUNT || ' rows';
+END;
+$$;
+
+CALL load_and_clean('RAW_DATA', 'CLEAN_DATA');
+
+**UDF vs Stored Procedure**: UDF = expression in SQL, returns per row, no DML. Procedure = called independently, can run DML, returns once.
+
+
+#### **3. External Function**
+Calls code that runs outside Snowflake via an HTTPS proxy service like AWS Lambda, Azure Functions, or GCP Cloud Functions.
+
+| **Attribute** | **Details** |
+| --- | --- |
+| **Purpose** | Access external APIs, ML models, SaaS services, or code in any language from SQL |
+| **Architecture** | Snowflake -> API Integration -> API Gateway -> Remote Service |
+| **Setup Steps** | 1. Create API Integration with allowed endpoints 2. Create external function pointing to proxy URL |
+| **Data Format** | JSON. Snowflake sends batches of rows. Remote service must return same # of rows. |
+| **Latency** | Higher than native UDF. Best for batch calls, not row-by-row real-time |
+| **Security** | Uses API Integration + IAM. Supports AWS PrivateLink, Azure Private Link |
+| **Example** | ```sql
+CREATE OR REPLACE EXTERNAL FUNCTION sentiment(text STRING)
+RETURNS STRING
+API_INTEGRATION = aws_api_gateway_integration
+AS 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/sentiment';
+
+SELECT review, sentiment(review) FROM product_reviews;
+
+
+**Key gotcha**: Remote service must handle batches, timeout < 30s, and follow Snowflake’s request/response spec.
+
+#### **4. Sequence**
+Database object that generates unique, incremental numeric values. Often used for surrogate keys.
+
+| **Attribute** | **Details** |
+| --- | --- |
+| **Purpose** | Auto-incrementing IDs, order numbers. Alternative to `AUTOINCREMENT`/`IDENTITY` |
+| **Properties** | `START`, `INCREMENT`, `MINVALUE`, `MAXVALUE`, `CYCLE` or `NO CYCLE` |
+| **Scope** | Database schema object. Can be shared across multiple tables. |
+| **Guarantees** | Unique if `NO CYCLE`. Not guaranteed gap-free. Not guaranteed chronological order. |
+| **Performance** | Lightweight, cached. Use `ORDER = 1` for strict ordering but slower. |
+| **Usage** | `sequence_name.NEXTVAL` to get next value. `CURRVAL` not supported. |
+| **Example** | ```sql
+CREATE OR REPLACE SEQUENCE order_seq 
+  START = 1 
+  INCREMENT = 1 
+  COMMENT = 'Order ID generator';
+
+CREATE OR REPLACE TABLE orders (
+  order_id NUMBER DEFAULT order_seq.NEXTVAL,
+  order_date TIMESTAMP,
+  amount NUMBER
+);
+
+INSERT INTO orders(order_date, amount) VALUES (CURRENT_TIMESTAMP(), 99.95);
+SELECT * FROM orders; -- order_id = 1
+
+
+**Sequence vs IDENTITY**: `IDENTITY(1,1)` is table-bound. `SEQUENCE` is standalone and reusable across tables.
+
+
+### **Quick Comparison**
+
+| **Feature** | **UDF** | **Stored Procedure** | **External Function** | **Sequence** |
+| --- | --- | --- | --- | --- |
+| **Invoked by** | `SELECT my_udf(col)` | `CALL my_proc()` | `SELECT ext_func(col)` | `seq.NEXTVAL` |
+| **Returns** | Scalar or table per row | One scalar value | Scalar per row | Number |
+| **Can run DML/DDL** | No | Yes | No, but remote service can | No |
+| **Runs where** | Snowflake warehouse | Snowflake warehouse | Outside Snowflake | Snowflake metadata |
+| **Use case** | Transform data in query | Orchestrate multi-step job | Call ML model/API | Generate IDs |
+
+Want me to add examples for Python UDFs or Snowpark procedures too?
+
+</details>
+
+<details> <summary>Snowflake Tasks & Streams</summary>
+  
+#### **Tasks**
+- **What**: Object that schedules execution of SQL, stored procedures, or Snowflake scripting logic.
+- **Use Cases**: Periodic data copies, maintenance routines, populating reporting tables. Any statement that needs to run on a schedule.
+- **Requirements**: `ACCOUNTADMIN` role or custom role with `CREATE TASK` + global `EXECUTE TASK` privilege.
+- **Key Components**:
+    1. **Name**: Unique identifier per schema
+    2. **Warehouse**: User-managed or Snowflake-managed serverless. Serverless can’t call Python/Java UDFs
+    3. **Schedule**: Interval in minutes, CRON, OR trigger `AFTER` another task
+    4. **SQL**: The statement to run
+- **Start/Stop**: Tasks are created suspended. Use `ALTER TASK ... RESUME` to start, `SUSPEND` to pause. Needs `EXECUTE TASK` + `OWNERSHIP`/`OPERATE`.
+- **DAGs**: Tasks can be chained into a Directed Acyclic Graph.
+    - Root task has a schedule. Child tasks use `AFTER task1, task2` and run only when parents succeed
+    - **Limits**: Max 1000 tasks per DAG, 100 dependencies per task, 100 children per task
+    - All tasks in a DAG must have same owner, database, and schema
+
+#### **Streams**
+- **What**: Schema-level object that tracks `INSERT`, `UPDATE`, `DELETE` on a table between two points in time.
+- **How**: `CREATE STREAM` on a table. Querying it returns only changed rows + 3 metadata columns:
+    1. `METADATA$ACTION`: `INSERT` or `DELETE`
+    2. `METADATA$ISUPDATE`: `TRUE` if part of an UPDATE. Updates show as `DELETE` + `INSERT` pair
+    3. `METADATA$ROW_ID`: Unique row identifier to track changes over time
+- **Offset**: Stream stores an offset marking where change tracking starts. Only changes after the offset appear.
+- **Consume Changes**: Offset advances when the stream is used in a DML statement, e.g. `INSERT INTO target SELECT * FROM stream`.
+
+#### **Tasks + Streams Together**
+- **Pattern**: Use `SYSTEM$STREAM_HAS_DATA()` in a task to run only when stream has changes.
+- **Flow**: Task scheduled -> checks stream -> if data, `INSERT` from stream to downstream table -> offset moves forward.
+- **Result**: Continuous, incremental processing pipeline for CDC/ETL using deltas, not full table scans.
+
+**Bottom Line**: Tasks = scheduling engine. Streams = change data capture. Combined = efficient, incremental data pipelines.
+</details>
+
+<details> <summary>Dynamic Tables</summary>
+
+### 📌 Overview
+- A **dynamic table** is a table that is **automatically refreshed** based on a defined query
+- Combines concepts of:
+  - Materialized views
+  - Streams
+  - Tasks
+- Eliminates need for manual pipeline orchestration
+
+---
+
+### 🧠 Key Concept: Declarative Approach
+- Define **what result you want (SQL query)**
+- Snowflake handles:
+  - Refresh logic
+  - Scheduling
+  - Dependency management
+
+---
+
+### 🔄 Core Functionality
+- Continuously updates data based on **source tables**
+- Maintains **data freshness automatically**
+- No need for:
+  - Streams
+  - Tasks
+  - Manual scheduling
+
+---
+
+### 🔗 Pipeline Capability
+- Dynamic tables can be **chained together**
+- Form **multi-step data pipelines**
+- Snowflake automatically:
+  - Detects dependencies
+  - Executes in correct order
+  - Ensures consistency
+
+---
+
+### ⏱️ Key Parameters
+- **Target Lag**
+  - Defines acceptable data freshness
+  - Trade-off: freshness vs cost
+
+- **Warehouse**
+  - Compute used for refresh operations
+
+- **Refresh Mode**
+  - Incremental (efficient)
+  - Full (recompute entire table)
+  - Auto (Snowflake decides)
+
+- **Initialize**
+  - Controls initial population timing
+
+---
+
+### ⚙️ Behavior
+- Incremental updates preferred for efficiency
+- Automatically adapts to source data changes
+- Supports **manual refresh trigger**
+- Can be **suspended/resumed**
+
+---
+
+### 📊 Monitoring
+- Track refresh status and history
+- View:
+  - Execution state (scheduled, running, failed, etc.)
+  - Refresh type (incremental/full)
+- UI provides **pipeline visualization**
+
+---
+
+### 🔐 Requirements (High-Level)
+- Privileges to:
+  - Create dynamic tables
+  - Access source data
+  - Use compute warehouse
+
+---
+
+### 🔑 Key Takeaways
+- Simplifies **data pipeline creation**
+- Fully **managed orchestration**
+- Declarative vs imperative approach
+- Ideal for **multi-step transformations**
+- Balances **freshness, cost, and performance**
+</details>
+
+<details> <summary></summary>
+</details>
+
+<details> <summary></summary>
+</details>
+
+<details> <summary></summary>
+</details>
+
+<details> <summary></summary>
+</details>
+
+
+
+
+
+
 <details> <summary>Snowflake Parameters</summary>
 
 ### ⚙️ What are Parameters?
@@ -507,10 +837,8 @@ Snowflake uses a hierarchical structure:
 ### 1. 🏢 Account Parameters
 - Apply to the **entire account**
 - Affect **all users & sessions**
-- Set using:
-  ```sql
-  ALTER ACCOUNT
-```
+- Set using: ALTER ACCOUNT
+
 PERIODIC_DATA_REKEYING → controls encryption key rotation
 
 2. 🔌 Session Parameters
@@ -562,77 +890,4 @@ Object params → runtime control of objects
 Lower-level settings override higher-level defaults
 Understand scope + precedence → critical for exam
 
-</details>
-
-<details> <summary>Snowflake Stored Procedures </summary>
-
-### ⚙️ What are Stored Procedures?
-- Named collections of **SQL statements + procedural logic**
-- Used to **automate and modularize repetitive tasks**
-- Example: batch deletes, maintenance jobs
-
----
-
-## 🧊 Stored Procedures in Snowflake
-
-### 🛠️ Implementation Methods
-- **JavaScript** (most established)
-- **Snowflake Scripting (SQL + procedural logic)**
-- **Snowpark** (Python, Java, Scala)
-
----
-
-### 📦 Key Characteristics
-- Created as **database objects** (within database & schema)
-- Can take **0 or more input parameters** (signature)
-- Must define a **return type** (even if not used)
-- Typically used for **actions**, not returning values
-
----
-
-### 🔁 Execution
-- Invoked using:
-  ```sql
-  CALL procedure_name(...);
-```
-
-Called as a standalone statement
-## 🧠 JavaScript Stored Procedures
-
-### ✨ Features
-- Mix **JavaScript + SQL**
-- Supports:
-  - Variables
-  - Loops
-  - Conditional logic
-  - Error handling
-
----
-
-### 🔗 SQL Execution
-- SQL is **built dynamically** within JavaScript
-- Executed using **Snowflake JavaScript API**
-
-```javascript
-var sql_command = "SELECT * FROM my_table";
-snowflake.execute({ sqlText: sql_command });
-
-## ⚖️ Stored Procedures vs UDFs
-
-| Feature              | Stored Procedure                  | UDF                          |
-|----------------------|----------------------------------|------------------------------|
-| Usage               | Standalone (`CALL`)              | Inside SQL queries           |
-| Return value        | Optional                         | Mandatory                    |
-| Return type         | Scalar (JS), Tabular (SQL)       | Scalar / Tabular             |
-| Purpose             | Perform actions (DML, admin)     | Compute & return values      |
-| Language flexibility| JS, SQL, Snowpark                | Limited (no JS API mixing)   |
-| Recursion           | Supported                        | Limited support              |
-| SQL integration     | Not usable inline                | Usable in `SELECT`, `WHERE`  |
-
-</details>
-
-<details> <summary></summary>
-</details>
-
-<details> <summary></summary>
 </details>
